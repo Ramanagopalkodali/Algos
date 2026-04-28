@@ -60,7 +60,8 @@ class VamanaIndex {
     using Candidate = std::pair<float, uint32_t>;
 
     // ---- Core algorithms ----
-
+    // Add this under "Core algorithms" or "Data"
+    uint32_t find_medoid();
     // Greedy search starting from start_node_.
     // Returns (sorted candidate list, number of distance computations).
     std::pair<std::vector<Candidate>, uint32_t>

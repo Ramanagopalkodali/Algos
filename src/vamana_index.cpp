@@ -177,15 +177,20 @@ void VamanaIndex::build(const std::string& data_path, uint32_t R, uint32_t L,
     graph_.resize(npts_);
     locks_ = std::vector<std::mutex>(npts_);
 
-    // --- Pick random start node ---
-    std::mt19937 rng(42);  // fixed seed for reproducibility
-    start_node_ = rng() % npts_;
-    std::cout << "  Start node: " << start_node_ << std::endl;
+    // --- Pick mediod start node ---
+    start_node_ = find_medoid(); 
+    std::cout << "  Medoid start node: " << start_node_ << std::endl;
 
     // --- Create random insertion order ---
+    std::mt19937 rng(42); 
     std::vector<uint32_t> perm(npts_);
     std::iota(perm.begin(), perm.end(), 0);
     std::shuffle(perm.begin(), perm.end(), rng);
+
+    auto it = std::find(perm.begin(), perm.end(), start_node_);
+    if (it != perm.end()) {
+        std::swap(perm[0], *it);
+    }
 
     // --- Build graph: parallel insertion with per-node locking ---
     uint32_t gamma_R = static_cast<uint32_t>(gamma * R);
@@ -344,4 +349,37 @@ void VamanaIndex::load(const std::string& index_path,
 
     std::cout << "Index loaded: " << npts_ << " points, " << dim_
               << " dims, start=" << start_node_ << std::endl;
+}
+
+uint32_t VamanaIndex::find_medoid() {
+    std::cout << "Calculating medoid for initialization..." << std::endl;
+    
+    // 1. Calculate the Centroid (average vector)
+    std::vector<float> centroid(dim_, 0.0f);
+    for (uint32_t i = 0; i < npts_; i++) {
+        const float* v = get_vector(i);
+        for (uint32_t d = 0; d < dim_; d++) {
+            centroid[d] += v[d];
+        }
+    }
+    for (uint32_t d = 0; d < dim_; d++) {
+        centroid[d] /= npts_;
+    }
+
+    // 2. Find the point closest to the Centroid
+    uint32_t medoid_id = 0;
+    float min_dist = std::numeric_limits<float>::max();
+
+    // Note: For massive datasets, you can sample 10,000 random points 
+    // here instead of checking all npts_ to save time.
+    for (uint32_t i = 0; i < npts_; i++) {
+        float d = compute_l2sq(centroid.data(), get_vector(i), dim_);
+        if (d < min_dist) {
+            min_dist = d;
+            medoid_id = i;
+        }
+    }
+
+    std::cout << "Medoid found at index: " << medoid_id << std::endl;
+    return medoid_id;
 }
