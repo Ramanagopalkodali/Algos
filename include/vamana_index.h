@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <vector>
+#include <memory>
 #include <mutex>
+#include <utility>
 #include <string>
 
 // Result of a single query search.
@@ -40,10 +42,14 @@ class VamanaIndex {
 
     // ---- Search ----
     // Search for K nearest neighbors of a query vector.
-    //   query: pointer to query vector (must have dim_ floats)
-    //   K:     number of nearest neighbors to return
-    //   L:     search list size (L >= K)
-    SearchResult search(const float* query, uint32_t K, uint32_t L) const;
+    //   query:   pointer to query vector (must have dim_ floats)
+    //   K:       number of nearest neighbors to return
+    //   L:       search list size (L >= K)
+    //   epsilon: adaptive exit threshold (0.0 = disabled, e.g. 0.1 = 10% slack)
+    //
+    // FIX: added epsilon parameter to match .cpp implementation.
+    SearchResult search(const float* query, uint32_t K, uint32_t L,
+                        float epsilon = 0.0f) const;
 
     // ---- Persistence ----
     // Save index (graph + metadata) to a binary file.
@@ -59,31 +65,48 @@ class VamanaIndex {
     // A candidate = (distance, node_id). Ordered by distance.
     using Candidate = std::pair<float, uint32_t>;
 
+    // --- Scratchpad for concurrent search optimization ---
+    struct Scratchpad {
+        std::vector<uint32_t> visited;   // token-stamped visited array
+        std::vector<uint32_t> expanded;  // token-stamped expanded array (FIX: replaces std::set)
+        uint32_t current_token = 0;      // unique ID for each query
+        Scratchpad(uint32_t n) : visited(n, 0), expanded(n, 0), current_token(0) {}
+    };
+
+    // One scratchpad per thread to avoid contention
+    mutable std::vector<std::unique_ptr<Scratchpad>> thread_scratchpads;
+
+    // Helper to fetch the scratchpad for the current thread
+    Scratchpad& get_scratchpad() const;
+    void init_scratchpads();
+
     // ---- Core algorithms ----
-    // Add this under "Core algorithms" or "Data"
-    uint32_t find_medoid();
+
     // Greedy search starting from start_node_.
     // Returns (sorted candidate list, number of distance computations).
     std::pair<std::vector<Candidate>, uint32_t>
-    greedy_search(const float* query, uint32_t L) const;
+    greedy_search(const float* query, uint32_t L, float epsilon = 0.0f) const;
 
     // Alpha-RNG pruning: selects a diverse subset of candidates as neighbors.
     // Modifies graph_[node] in place. Candidates should NOT include node itself.
     void robust_prune(uint32_t node, std::vector<Candidate>& candidates,
                       float alpha, uint32_t R);
 
+    // Returns the index of the point closest to the dataset centroid.
+    // Used as the fixed entry point (start_node_) for all graph traversals.
+    uint32_t find_medoid();
+
     // ---- Data ----
-    float*   data_    = nullptr;  // contiguous row-major [npts x dim], aligned
-    uint32_t npts_    = 0;
-    uint32_t dim_     = 0;
-    bool     owns_data_ = false;  // whether we allocated data_
+    float*   data_      = nullptr;  // contiguous row-major [npts x dim]
+    uint32_t npts_      = 0;
+    uint32_t dim_       = 0;
+    bool     owns_data_ = false;
 
     // ---- Graph ----
-    std::vector<std::vector<uint32_t>> graph_;  // adjacency lists
+    std::vector<std::vector<uint32_t>> graph_;
     uint32_t start_node_ = 0;
 
     // ---- Concurrency ----
-    // Per-node locks for parallel build (mutable so search can be const).
     mutable std::vector<std::mutex> locks_;
 
     // ---- Helpers ----
